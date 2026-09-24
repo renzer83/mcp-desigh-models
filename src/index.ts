@@ -23,6 +23,8 @@ import { render, type Model } from "./comfy.js";
 const OUTPUT_ROOT = process.env.COMFY_OUTPUT_ROOT ?? "/data/studio/renders";
 const PREFIX_BASE = process.env.MCP_PREFIX_BASE ?? "studio/design/mcp";
 const PLANNER_MODEL = process.env.PLANNER_MODEL ?? "claude-sonnet-4-5";
+// backend for screen skeletons: "zimage" (turbo, ~15s, default) or "qwen" (slower, max legibility)
+const SCREEN_MODEL = (process.env.MCP_SCREEN_MODEL as Model) ?? "zimage";
 
 const slug = (s: string) =>
   (s || "item").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 32) || "item";
@@ -46,10 +48,10 @@ const ASSET_MODEL: Record<AssetType, Model> = {
   photo: "flux", illustration: "flux", background: "flux", icon: "qwen", logo: "qwen",
 };
 
-async function renderScreenEntry(input: ScreenInput, productSlug: string, index: number): Promise<ScreenEntry> {
+async function renderScreenEntry(input: ScreenInput, productSlug: string, index: number, model: Model = SCREEN_MODEL): Promise<ScreenEntry> {
   const { positive, negative } = buildScreenPrompt(input);
   const prefix = `${PREFIX_BASE}/${productSlug}/${String(index).padStart(2, "0")}-${slug(input.screen)}`;
-  const r = await render({ positive, negative, prefix, model: "qwen" });
+  const r = await render({ positive, negative, prefix, model });
   return { screen: input.screen, active: input.active ?? input.screen, tags: input.tags ?? [], image_path: r.path, filename: r.filename, seed: r.seed, prompt: positive, negative };
 }
 
@@ -95,9 +97,10 @@ server.tool(
     palette: z.string().optional(), accent: z.string().optional(),
     sidebar: z.array(z.string()).optional(), active: z.string().optional(),
     tags: z.array(z.string()).optional(), style: z.string().optional(),
+    model: z.enum(["qwen", "zimage"]).optional().describe("Screen backend: qwen (slow, very legible) or zimage (turbo, fast). Defaults to MCP_SCREEN_MODEL."),
   },
   async (args) => {
-    const entry = await renderScreenEntry(args as ScreenInput, slug(args.product), 0);
+    const entry = await renderScreenEntry(args as ScreenInput, slug(args.product), 0, args.model as Model | undefined ?? SCREEN_MODEL);
     return { content: [{ type: "text", text: JSON.stringify(entry, null, 2) }] };
   }
 );
@@ -112,7 +115,7 @@ server.tool(
     type: z.enum(["photo", "illustration", "icon", "background", "logo"]),
     prompt: z.string().describe("Scene / subject"),
     palette: z.string().optional(), accent: z.string().optional(), style: z.string().optional(),
-    model: z.enum(["qwen", "flux"]).optional(),
+    model: z.enum(["qwen", "flux", "zimage"]).optional(),
     width: z.number().int().optional(), height: z.number().int().optional(),
   },
   async (args) => {
@@ -130,8 +133,9 @@ server.tool(
     theme: z.enum(["dark", "light"]).optional(),
     max_screens: z.number().int().min(1).max(10).optional(),
     sidebar: z.array(z.string()).optional(), palette: z.string().optional(), accent: z.string().optional(),
+    screen_model: z.enum(["qwen", "zimage"]).optional().describe("Backend for screens (default MCP_SCREEN_MODEL)"),
     screens: z.array(z.object({ screen: z.string(), layout: z.string(), active: z.string().optional(), tags: z.array(z.string()).optional() })).optional(),
-    assets: z.array(z.object({ role: z.string(), type: z.enum(["photo", "illustration", "icon", "background", "logo"]), prompt: z.string(), model: z.enum(["qwen", "flux"]).optional() })).optional(),
+    assets: z.array(z.object({ role: z.string(), type: z.enum(["photo", "illustration", "icon", "background", "logo"]), prompt: z.string(), model: z.enum(["qwen", "flux", "zimage"]).optional() })).optional(),
   },
   async (args) => {
     const theme: Theme = args.theme ?? "dark";
@@ -152,7 +156,7 @@ server.tool(
     const screenOut: ScreenEntry[] = [];
     let i = 0;
     for (const s of screens.slice(0, maxScreens)) {
-      screenOut.push(await renderScreenEntry({ product, screen: s.screen, layout: s.layout, theme, palette, accent, sidebar, active: s.active ?? s.screen, tags: s.tags }, productSlug, i++));
+      screenOut.push(await renderScreenEntry({ product, screen: s.screen, layout: s.layout, theme, palette, accent, sidebar, active: s.active ?? s.screen, tags: s.tags }, productSlug, i++, (args.screen_model as Model | undefined) ?? SCREEN_MODEL));
     }
 
     const assetOut: AssetEntry[] = [];

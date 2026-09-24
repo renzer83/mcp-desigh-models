@@ -31,10 +31,16 @@ imagery), and — when driven by the Studio flow in [`studio-flow/`](studio-flow
 
 ## Requirements
 
-- A running ComfyUI with the qwen-image checkpoints installed:
-  `qwen_image_2512_fp8_e4m3fn.safetensors`, `qwen_2.5_vl_7b_fp8_scaled.safetensors`,
-  `qwen_image_vae.safetensors`.
+- A running ComfyUI with the image checkpoints installed:
+  - **Z-Image Turbo** (default screen backend, ~15s/image): `z_image_turbo_bf16.safetensors`,
+    `qwen_3_4b.safetensors`, `ae.safetensors`.
+  - **qwen-image** (optional, max legibility, slower): `qwen_image_2512_fp8_e4m3fn.safetensors`,
+    `qwen_2.5_vl_7b_fp8_scaled.safetensors`, `qwen_image_vae.safetensors`.
+  - **flux-schnell** (content assets): `flux1-schnell-fp8.safetensors`.
 - Node.js >= 20.
+
+The screen backend defaults to `zimage`; set `MCP_SCREEN_MODEL=qwen` for maximum text
+legibility, or pass `model` per call.
 
 ## Configuration (environment)
 
