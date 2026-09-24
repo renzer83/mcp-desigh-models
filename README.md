@@ -12,14 +12,22 @@ every screen). Callers don't need to know any of it.
 
 ## Tools
 
-- **`render_screen`** — render one described screen. You pass a name, a prose layout of
-  the main panel, and (for a coherent product) the shared sidebar plus the active item.
-  Returns the image path and a manifest entry.
-- **`generate_product`** — turn an idea into a set of screens. Either pass `screens`
-  explicitly, or let the server plan them from `idea` when a planner is configured.
-  Renders every screen with a shared sidebar and writes `manifest.json` beside the images.
+- **`render_screen`** — render one screen skeleton (placeholder-text mode): only the
+  wordmark, sidebar nav, screen title and section titles are real; body and rows are bars.
+  You pass a name, a prose layout, and (for a coherent product) the shared sidebar plus the
+  active item. Returns the image path and a manifest entry.
+- **`render_asset`** — render one real content asset: hero photo, illustration, icon,
+  background or logo mark. Photos and people are allowed here (unlike screens). Uses fast
+  flux for imagery and qwen for crisp glyphs by default; override with `model`.
+- **`generate_product`** — turn an idea into a set of screens **plus** content assets.
+  Either pass `screens` explicitly, or let the server plan them from `idea` when a planner
+  is configured. Renders everything under one product folder and writes `manifest.json`.
 
 Rendering runs on one GPU, sequentially — several screens take many minutes.
+
+The output is three layers: **skeletons** (placeholder composition), **assets** (the real
+imagery), and — when driven by the Studio flow in [`studio-flow/`](studio-flow/) — a
+**complete build spec** (tokens, component trees, real copy). See `studio-flow/README.md`.
 
 ## Requirements
 

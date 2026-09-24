@@ -1,0 +1,156 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "design-models product spec",
+  "description": "The complete buildable specification returned by the Analyst agent.",
+  "type": "object",
+  "required": ["product", "design_tokens", "global", "screens"],
+  "properties": {
+    "product": {
+      "type": "object",
+      "required": ["name"],
+      "properties": {
+        "name": { "type": "string" },
+        "tagline": { "type": "string" },
+        "description": { "type": "string" }
+      }
+    },
+    "design_tokens": {
+      "type": "object",
+      "required": ["colors", "typography"],
+      "properties": {
+        "colors": {
+          "type": "object",
+          "description": "role -> hex, e.g. background, surface, primary, secondary, accent, success, warning, danger, border",
+          "additionalProperties": { "type": "string" }
+        },
+        "typography": {
+          "type": "object",
+          "properties": {
+            "display": { "type": "string", "description": "font family for display/headings" },
+            "body": { "type": "string" },
+            "mono": { "type": "string" },
+            "scale": { "type": "object", "additionalProperties": { "type": "string" } },
+            "weights": { "type": "object", "additionalProperties": { "type": "number" } }
+          }
+        },
+        "spacing": { "type": "object", "additionalProperties": { "type": "string" } },
+        "radii": { "type": "object", "additionalProperties": { "type": "string" } },
+        "borders": { "type": "object", "additionalProperties": { "type": "string" } },
+        "shadows": { "type": "object", "additionalProperties": { "type": "string" } },
+        "motion": {
+          "type": "object",
+          "properties": {
+            "easing": { "type": "object", "additionalProperties": { "type": "string" } },
+            "durations": { "type": "object", "additionalProperties": { "type": "string" } }
+          }
+        }
+      }
+    },
+    "global": {
+      "type": "object",
+      "properties": {
+        "sidebar": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["label"],
+            "properties": { "label": { "type": "string" }, "icon": { "type": "string" }, "route": { "type": "string" } }
+          }
+        },
+        "topbar": { "type": "object" },
+        "grid": { "type": "object" },
+        "breakpoints": { "type": "object", "additionalProperties": { "type": "string" } }
+      }
+    },
+    "screens": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "component_tree"],
+        "properties": {
+          "name": { "type": "string" },
+          "route": { "type": "string" },
+          "purpose": { "type": "string" },
+          "active_nav": { "type": "string" },
+          "image_ref": { "type": "string", "description": "path to the placeholder skeleton image" },
+          "component_tree": {
+            "type": "array",
+            "description": "nested components with type, props, real copy and data shape",
+            "items": {
+              "type": "object",
+              "required": ["type"],
+              "properties": {
+                "type": { "type": "string" },
+                "props": { "type": "object" },
+                "copy": {},
+                "data_shape": { "type": "object" },
+                "children": { "type": "array" }
+              }
+            }
+          },
+          "regions": { "type": "object", "description": "named layout regions and their grid placement" },
+          "states": {
+            "type": "object",
+            "properties": { "loading": {}, "empty": {}, "error": {} }
+          },
+          "responsive": {
+            "type": "object",
+            "description": "breakpoint -> how the screen adapts",
+            "additionalProperties": { "type": "string" }
+          }
+        }
+      }
+    },
+    "components": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "type"],
+        "properties": {
+          "name": { "type": "string" },
+          "type": { "type": "string" },
+          "source": { "type": "string", "description": "library / pattern the component comes from" },
+          "props": { "type": "object" }
+        }
+      }
+    },
+    "assets": {
+      "type": "object",
+      "properties": {
+        "brand": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": { "role": { "type": "string" }, "type": { "type": "string" }, "file": { "type": "string" } }
+          }
+        },
+        "per_screen": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "screen": { "type": "string" },
+              "assets": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "role": { "type": "string" },
+                    "type": { "type": "string" },
+                    "prompt": { "type": "string" },
+                    "file": { "type": "string" },
+                    "placement": { "type": "string" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "copy": {
+      "type": "object",
+      "description": "every real string keyed by a stable id, so image placeholders map to real text"
+    }
+  }
+}
