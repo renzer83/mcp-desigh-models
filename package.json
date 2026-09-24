@@ -1,0 +1,29 @@
+{
+  "name": "mcp-design-models",
+  "version": "0.1.0",
+  "description": "MCP server that turns a product idea into UI screen mockups by driving a local qwen-image (ComfyUI) pipeline, returning both the rendered images and a buildable component manifest.",
+  "type": "module",
+  "bin": {
+    "mcp-design-models": "dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "node --experimental-strip-types src/index.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.6.0"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT"
+}
