@@ -14,7 +14,7 @@
         "modelo": "opus-4.8",
         "pasta": "/data/studio",
         "mcp": "design-models",
-        "ferramentas": "WebSearch",
+        "ferramentas": "WebSearch mcp__design-models",
         "esquema": "{\"type\":\"object\",\"required\":[\"product\",\"manifest_path\",\"screens\"],\"properties\":{\"product\":{\"type\":\"string\"},\"manifest_path\":{\"type\":\"string\"},\"sidebar\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}},\"palette\":{\"type\":\"string\"},\"accent\":{\"type\":\"string\"},\"screens\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"screen\":{\"type\":\"string\"},\"active\":{\"type\":\"string\"},\"components\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}},\"image_path\":{\"type\":\"string\"}}}},\"assets\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"role\":{\"type\":\"string\"},\"type\":{\"type\":\"string\"},\"image_path\":{\"type\":\"string\"}}}}}}",
         "timeout_s": 3600
       }
