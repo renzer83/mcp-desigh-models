@@ -1,175 +1,130 @@
 #!/usr/bin/env node
 /**
- * mcp-design-models
+ * mcp-design-models — cliente fino do Studio.
  *
- * Turns a product idea into UI screen mockups and the real imagery a site uses,
- * driving a local qwen/flux (ComfyUI) pipeline. Returns rendered files plus a
- * manifest, so a downstream agent gets buildable structure, not just pictures.
+ * Turns a product idea into UI screen mockups + a complete buildable spec. All the
+ * heavy lifting (planning, rendering on the GPU, writing the spec) happens inside the
+ * Studio engine's "Design Factory" flow, which owns the queue and the GPU guard. This
+ * MCP is a thin trigger: it forwards the idea as a per-run parameter, runs the flow
+ * synchronously, waits, and returns the analyst's spec plus the rendered image paths.
  *
- * Tools:
- *   render_screen     one screen skeleton (placeholder text) -> image + entry
- *   render_asset      one real content asset (hero/illustration/icon/...) -> image + entry
- *   generate_product  a set of screens (+ optional assets) -> render all + manifest.json
+ * One tool:
+ *   generate_product(idea, ...) -> { spec, manifest_path, screens[], assets[] }
+ *
+ * Config (env):
+ *   STUDIO_URL       default http://127.0.0.1:28950
+ *   STUDIO_FLOW_ID   default flow_design_factory
  */
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { mkdir, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
-import { buildScreenPrompt, buildAssetPrompt, type ScreenInput, type AssetInput, type Theme, type AssetType } from "./prompt.js";
-import { render, type Model } from "./comfy.js";
+import { fetch, Agent } from "undici";
 
-const OUTPUT_ROOT = process.env.COMFY_OUTPUT_ROOT ?? "/data/studio/renders";
-const PREFIX_BASE = process.env.MCP_PREFIX_BASE ?? "studio/design/mcp";
-const PLANNER_MODEL = process.env.PLANNER_MODEL ?? "claude-sonnet-4-5";
-// backend for screen skeletons: "zimage" (turbo, ~15s, default) or "qwen" (slower, max legibility)
-const SCREEN_MODEL = (process.env.MCP_SCREEN_MODEL as Model) ?? "zimage";
+const STUDIO_URL = (process.env.STUDIO_URL ?? "http://127.0.0.1:28950").replace(/\/+$/, "");
+const FLOW_ID = process.env.STUDIO_FLOW_ID ?? "flow_design_factory";
 
-const slug = (s: string) =>
-  (s || "item").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 32) || "item";
+// A design run renders many images on one GPU and takes many minutes; disable the
+// client-side header/body timeouts so the synchronous ?esperar=1 call can wait it out.
+const dispatcher = new Agent({ headersTimeout: 0, bodyTimeout: 0, connectTimeout: 30_000 });
 
-interface ScreenEntry {
-  screen: string; active: string; tags: string[];
-  image_path: string; filename: string; seed: number; prompt: string; negative: string;
+interface Passo {
+  no_id: string;
+  estado: string;
+  saida: unknown;
+  erro?: string | null;
 }
-interface AssetEntry {
-  role: string; type: AssetType; model: Model;
-  image_path: string; filename: string; seed: number; prompt: string;
-}
-interface Manifest {
-  product: string; idea?: string; theme: Theme;
-  palette?: string; accent?: string; sidebar?: string[];
-  screens: ScreenEntry[]; assets: AssetEntry[]; created_at: string;
+interface Run {
+  id: string;
+  estado: string;
+  erro?: string | null;
+  passos?: Passo[];
 }
 
-// default backend per asset type: fast flux for imagery, qwen for crisp glyphs
-const ASSET_MODEL: Record<AssetType, Model> = {
-  photo: "flux", illustration: "flux", background: "flux", icon: "qwen", logo: "qwen",
-};
-
-async function renderScreenEntry(input: ScreenInput, productSlug: string, index: number, model: Model = SCREEN_MODEL): Promise<ScreenEntry> {
-  const { positive, negative } = buildScreenPrompt(input);
-  const prefix = `${PREFIX_BASE}/${productSlug}/${String(index).padStart(2, "0")}-${slug(input.screen)}`;
-  const r = await render({ positive, negative, prefix, model });
-  return { screen: input.screen, active: input.active ?? input.screen, tags: input.tags ?? [], image_path: r.path, filename: r.filename, seed: r.seed, prompt: positive, negative };
+/** Build the product brief the compositor reads as {{ param.brief }}. */
+function buildBrief(a: {
+  idea: string; product?: string; theme?: string; palette?: string;
+  accent?: string; max_screens?: number; constraints?: string;
+}): string {
+  const lines = [a.idea.trim()];
+  if (a.product) lines.push(`Product name: ${a.product}`);
+  if (a.theme) lines.push(`Theme: ${a.theme}`);
+  if (a.palette) lines.push(`Palette (in words): ${a.palette}`);
+  if (a.accent) lines.push(`Accent colour: ${a.accent}`);
+  if (a.max_screens) lines.push(`Screens: at most ${a.max_screens}.`);
+  if (a.constraints) lines.push(`Constraints: ${a.constraints}`);
+  return lines.join("\n");
 }
 
-async function renderAssetEntry(input: AssetInput, productSlug: string, model?: Model, width?: number, height?: number): Promise<AssetEntry> {
-  const { positive, negative } = buildAssetPrompt(input);
-  const m = model ?? ASSET_MODEL[input.type];
-  const prefix = `${PREFIX_BASE}/${productSlug}/assets/${slug(input.role)}`;
-  const r = await render({ positive, negative, prefix, model: m, width, height });
-  return { role: input.role, type: input.type, model: m, image_path: r.path, filename: r.filename, seed: r.seed, prompt: positive };
-}
-
-/** Optional: plan screens from an idea via the Anthropic API, if a key is set. */
-async function planScreens(idea: string, maxScreens: number, theme: Theme) {
-  const key = process.env.ANTHROPIC_API_KEY;
-  if (!key) return null;
-  const sys =
-    "You are a senior product designer. Given a product idea, return STRICT JSON only (no prose): " +
-    '{"product":string,"palette":string(words),"accent":string(words),"sidebar":string[] (single words, once each),' +
-    '"screens":[{"screen":string,"active":string,"layout":string,"tags":string[]}]}. ' +
-    `At most ${maxScreens} screens, ${theme} theme, compose each layout from real dashboard components; keep the sidebar identical across screens.`;
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: { "content-type": "application/json", "x-api-key": key, "anthropic-version": "2023-06-01" },
-    body: JSON.stringify({ model: PLANNER_MODEL, max_tokens: 4096, system: sys, messages: [{ role: "user", content: `Product idea:\n${idea}` }] }),
-  });
-  const body: any = await res.json();
-  const text: string = (body.content ?? []).map((b: any) => b.text ?? "").join("");
-  const match = text.match(/\{[\s\S]*\}/);
-  if (!match) throw new Error("planner did not return JSON");
-  return JSON.parse(match[0]);
-}
-
-const server = new McpServer({ name: "mcp-design-models", version: "0.2.0" });
-
-server.tool(
-  "render_screen",
-  "Render one UI screen skeleton with the local qwen pipeline. Placeholder-text mode: only the wordmark, sidebar nav, " +
-    "screen title and section titles are real; body/rows are bars. Give the shared sidebar and the active item for a coherent product. A render takes a few minutes.",
-  {
-    product: z.string(), screen: z.string(),
-    layout: z.string().describe("Prose: which components, where, proportions"),
-    theme: z.enum(["dark", "light"]).optional(),
-    palette: z.string().optional(), accent: z.string().optional(),
-    sidebar: z.array(z.string()).optional(), active: z.string().optional(),
-    tags: z.array(z.string()).optional(), style: z.string().optional(),
-    model: z.enum(["qwen", "zimage"]).optional().describe("Screen backend: qwen (slow, very legible) or zimage (turbo, fast). Defaults to MCP_SCREEN_MODEL."),
-  },
-  async (args) => {
-    const entry = await renderScreenEntry(args as ScreenInput, slug(args.product), 0, args.model as Model | undefined ?? SCREEN_MODEL);
-    return { content: [{ type: "text", text: JSON.stringify(entry, null, 2) }] };
-  }
-);
-
-server.tool(
-  "render_asset",
-  "Render one real content asset (hero photo, illustration, icon, background, or logo mark) for a product. Unlike screens, " +
-    "photos and people are allowed here. Defaults to fast flux for imagery and qwen for glyphs; override with `model`.",
-  {
-    product: z.string(),
-    role: z.string().describe('What it is for, e.g. "landing hero"'),
-    type: z.enum(["photo", "illustration", "icon", "background", "logo"]),
-    prompt: z.string().describe("Scene / subject"),
-    palette: z.string().optional(), accent: z.string().optional(), style: z.string().optional(),
-    model: z.enum(["qwen", "flux", "zimage"]).optional(),
-    width: z.number().int().optional(), height: z.number().int().optional(),
-  },
-  async (args) => {
-    const entry = await renderAssetEntry(args as AssetInput, slug(args.product), args.model as Model | undefined, args.width, args.height);
-    return { content: [{ type: "text", text: JSON.stringify(entry, null, 2) }] };
-  }
-);
+const server = new McpServer({ name: "mcp-design-models", version: "0.3.0" });
 
 server.tool(
   "generate_product",
-  "Render a whole product: a set of screens (passed in, or planned from `idea` if a planner is configured) plus optional " +
-    "content assets, all under one product folder, and write manifest.json. Sequential on one GPU, so it takes many minutes.",
+  "Turn a product idea into UI screen mockups plus a complete buildable spec (design tokens, " +
+    "component trees with real copy, assets). Runs the Studio 'Design Factory' flow (compositor plans " +
+    "-> native render on the GPU queue -> analyst writes the spec) and returns the spec and image paths. " +
+    "Sequential on one GPU, so it takes several minutes.",
   {
-    product: z.string().optional(), idea: z.string(),
+    idea: z.string().describe("The product idea, audience and tone."),
+    product: z.string().optional().describe("Product name, if you want to fix it."),
     theme: z.enum(["dark", "light"]).optional(),
+    palette: z.string().optional().describe("Palette in words (e.g. 'graphite and off-white')."),
+    accent: z.string().optional().describe("Accent colour in words (e.g. 'electric violet')."),
     max_screens: z.number().int().min(1).max(10).optional(),
-    sidebar: z.array(z.string()).optional(), palette: z.string().optional(), accent: z.string().optional(),
-    screen_model: z.enum(["qwen", "zimage"]).optional().describe("Backend for screens (default MCP_SCREEN_MODEL)"),
-    screens: z.array(z.object({ screen: z.string(), layout: z.string(), active: z.string().optional(), tags: z.array(z.string()).optional() })).optional(),
-    assets: z.array(z.object({ role: z.string(), type: z.enum(["photo", "illustration", "icon", "background", "logo"]), prompt: z.string(), model: z.enum(["qwen", "flux", "zimage"]).optional() })).optional(),
+    constraints: z.string().optional().describe("Any extra constraints for the design."),
   },
   async (args) => {
-    const theme: Theme = args.theme ?? "dark";
-    const maxScreens = args.max_screens ?? 6;
-    let { product, sidebar, palette, accent, screens } = args as any;
+    const brief = buildBrief(args);
+    const parametros = {
+      brief,
+      product: args.product,
+      theme: args.theme,
+      palette: args.palette,
+      accent: args.accent,
+      max_screens: args.max_screens,
+    };
 
-    if (!screens || !screens.length) {
-      const plan = await planScreens(args.idea, maxScreens, theme);
-      if (!plan) {
-        return { isError: true, content: [{ type: "text", text: "No `screens` provided and no planner configured (set ANTHROPIC_API_KEY, or pass `screens`). The calling agent can plan the screens and pass them in." }] };
+    const url = `${STUDIO_URL}/api/flows/${FLOW_ID}/correr?esperar=1`;
+    let run: Run;
+    try {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ parametros }),
+        dispatcher,
+      });
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        return { isError: true, content: [{ type: "text", text: `Studio ${res.status} at ${url}: ${text}` }] };
       }
-      product = product ?? plan.product; sidebar = sidebar ?? plan.sidebar;
-      palette = palette ?? plan.palette; accent = accent ?? plan.accent; screens = plan.screens;
+      run = (await res.json()) as Run;
+    } catch (e: any) {
+      return { isError: true, content: [{ type: "text", text: `Could not reach the Studio at ${url}: ${e?.message ?? e}` }] };
     }
 
-    product = product ?? "Product";
-    const productSlug = slug(product);
-    const screenOut: ScreenEntry[] = [];
-    let i = 0;
-    for (const s of screens.slice(0, maxScreens)) {
-      screenOut.push(await renderScreenEntry({ product, screen: s.screen, layout: s.layout, theme, palette, accent, sidebar, active: s.active ?? s.screen, tags: s.tags }, productSlug, i++, (args.screen_model as Model | undefined) ?? SCREEN_MODEL));
+    const passos = run.passos ?? [];
+    if (run.estado === "falhou") {
+      const falhou = passos.find((p) => p.estado === "falhou");
+      const motivo = falhou?.erro ?? run.erro ?? "unknown error";
+      return { isError: true, content: [{ type: "text", text: `The Design Factory run failed: ${motivo}` }] };
     }
 
-    const assetOut: AssetEntry[] = [];
-    for (const a of args.assets ?? []) {
-      assetOut.push(await renderAssetEntry({ product, role: a.role, type: a.type as AssetType, prompt: a.prompt, palette, accent }, productSlug, a.model as Model | undefined));
+    const analyst = passos.find((p) => p.no_id === "analyst");
+    const telas = passos.find((p) => p.no_id === "telas");
+    const spec = analyst?.saida ?? null;
+    if (!spec) {
+      return { isError: true, content: [{ type: "text", text: `The run finished but produced no spec (analyst node output empty). Run ${run.id}.` }] };
     }
 
-    const manifest: Manifest = { product, idea: args.idea, theme, palette, accent, sidebar, screens: screenOut, assets: assetOut, created_at: new Date().toISOString() };
-    const manifestPath = `${OUTPUT_ROOT}/${PREFIX_BASE}/${productSlug}/manifest.json`;
-    await mkdir(dirname(manifestPath), { recursive: true });
-    await writeFile(manifestPath, JSON.stringify(manifest, null, 2), "utf8");
-
-    return { content: [{ type: "text", text: JSON.stringify({ manifest_path: manifestPath, ...manifest }, null, 2) }] };
+    const t = (telas?.saida ?? {}) as any;
+    const result = {
+      run_id: run.id,
+      manifest_path: t.manifest_path ?? null,
+      screens: (t.screens ?? []).map((s: any) => ({ screen: s.screen, image_path: s.image_path })),
+      assets: (t.assets ?? []).map((a: any) => ({ role: a.role, type: a.type, image_path: a.image_path })),
+      spec,
+    };
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
   }
 );
 

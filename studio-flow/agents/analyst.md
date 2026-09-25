@@ -6,8 +6,9 @@ agent that called this pipeline can build the real product without guessing.
 
 ## Input
 
-From Agent 1 you receive `manifest_path`, the `product`, `sidebar`, `palette`, `accent`, and
-the list of rendered `screens` and `assets` (each with an `image_path`).
+The `telas` node rendered everything and wrote `manifest.json`. You receive its
+`manifest_path`, plus the `product`, `sidebar`, `palette` and `accent` from the compositor.
+The manifest lists every rendered `screen` and `asset` with its `image_path`.
 
 ## What to do
 
