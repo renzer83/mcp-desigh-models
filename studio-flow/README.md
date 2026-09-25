@@ -1,15 +1,18 @@
 # Studio flow — Design Factory
 
-The default flow that turns a product idea into screens + assets + a complete build spec,
-by pairing this MCP with two agents inside the Studio engine.
+The flow that turns a product idea into screens + assets + a complete build spec, entirely
+inside the Studio engine. The MCP (repo root) is just a thin trigger for it.
 
 ```
-idea (parameter)
+idea (per-run parameter: {{ param.brief }})
       │
-  ┌───▼─────────┐   uses the design-models MCP
-  │ compositor  │   plan screens + real components → generate_product → skeletons + assets + manifest.json
+  ┌───▼─────────┐   agent — PLANS only (no rendering)
+  │ compositor  │   plan screens + real components + assets + palette → JSON
   └───┬─────────┘
-  ┌───▼─────────┐   reads the images + manifest
+  ┌───▼─────────┐   native `telas` node — RENDERS on the Studio queue + GPU guard
+  │   telas     │   screen skeletons + assets (prompt discipline built in) → manifest.json
+  └───┬─────────┘
+  ┌───▼─────────┐   agent — reads the images + manifest
   │  analyst    │   → complete spec (tokens, component trees, real copy, assets, responsive)
   └───┬─────────┘
       ▼
@@ -18,36 +21,37 @@ idea (parameter)
 
 - The **image is a placeholder skeleton** (composition only). The **spec is the source of truth**
   (real copy, config, data shapes). The **assets** are the real imagery the site drops in.
+- Rendering is a **native Studio node** (`telas`), not an MCP call — so it runs through the
+  queue and the single-GPU guard, one image at a time. There is no circular dependency.
 
 ## Files
 
-- `flow.json` — the Studio flow graph (two `agente` nodes). Import via `PUT /api/flows/flow_design_factory`.
-- `agents/compositor.md`, `agents/analyst.md` — the agent prompts (also inlined in `flow.json`).
+- `flow.json` — the Studio flow graph (compositor → telas → analyst). The authoritative
+  copy lives in the Studio repo at `workflows/design_factory.json`; this is a mirror.
+- `agents/compositor.md`, `agents/analyst.md` — the agent prompts.
 - `spec-schema.json` — the schema the analyst's spec conforms to.
 
 ## One-time setup
 
-1. Build and register the MCP (see the repo root README), then register it in the Studio
-   panel's MCP section under the name **`design-models`** (the `compositor` node selects it
-   by that name). The MCP must reach the same ComfyUI the Studio uses.
-2. Import the flow:
-   ```bash
-   curl -X PUT http://127.0.0.1:28950/api/flows/flow_design_factory \
-     -H 'Content-Type: application/json' --data @flow.json
-   ```
+The `telas` node type and the flow ship with the Studio engine. Register/update the flow
+from the Studio repo:
 
-## Run it with an idea (the parameter)
+```bash
+node workflows/build_design_factory_flow.mjs
+```
 
-The product brief lives in the `compositor` node's `objetivo`, between the markers
-`<<PRODUCT_BRIEF>> ... <<END_PRODUCT_BRIEF>>`. A factory worker sets it per project by
-`GET`ting the flow, replacing the text between those markers, `PUT`ting it back, then
-`POST /api/flows/flow_design_factory/correr`. This mirrors how Studio already parametrizes
-agent briefs.
+(Restart `studio-api` first if the `telas` node type is newly deployed.)
 
-The run returns the analyst's spec; the rendered screens, assets and `manifest.json` live
-under `COMFY_OUTPUT_ROOT/MCP_PREFIX_BASE/<product>/`.
+## Run it with an idea
 
-## Without a GPU
+The idea is a **per-run parameter**, not a stored edit:
 
-If ComfyUI is not available, point `COMFY_URL` at another host, or drive only the spec side
-(the analyst) — the pipeline degrades to structure + copy without freshly rendered images.
+```bash
+curl -X POST 'http://127.0.0.1:28950/api/flows/flow_design_factory/correr?esperar=1' \
+  -H 'Content-Type: application/json' \
+  --data '{"parametros":{"brief":"a task-tracking SaaS for indie devs, dark, technical tone"}}'
+```
+
+The call is synchronous: it returns the finished run, whose `analyst` step output is the
+spec and whose `telas` step output has the `manifest_path` and image paths. The MCP's
+`generate_product` wraps exactly this.

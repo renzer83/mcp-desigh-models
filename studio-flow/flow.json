@@ -1,6 +1,6 @@
 {
   "id": "flow_design_factory",
-  "nome": "Design Factory — idea → telas (qwen) + assets + spec completa",
+  "nome": "Design Factory — idea → telas (qwen/z-image) + assets + spec completa",
   "ativo": true,
   "nos": [
     {
@@ -8,15 +8,32 @@
       "tipo": "agente",
       "nome": "compositor",
       "params": {
-        "papel": "Senior UI/UX + brand design director. You compose real screens from real component patterns and render them as placeholder-text skeletons via the design-models MCP. You never produce AI-looking filler.",
-        "objetivo": "A product brief is injected between the markers (the factory replaces it per run):\n\n<<PRODUCT_BRIEF>>\nDescribe the product idea, audience, tone and any constraints here.\n<<END_PRODUCT_BRIEF>>\n\n1. Decide the authenticated product's core screens (max 6 unless the brief asks for more) with ONE shared sidebar (single-word nav items, once each) identical across screens.\n2. For each screen use WebSearch to ground the composition in real component patterns (shadcn/ui, Tailwind UI blocks): sidebar, stat cards, data tables, config forms, charts, side detail panels. Note the components per screen.\n3. Decide the content assets: brand (logo mark, background) and per-screen imagery (hero, illustration, empty-state). Keep them minimal and real.\n4. Choose palette + accent in words (dark theme by default), consistent across screens.\n5. Call the MCP tool `generate_product` ONCE with product, idea, theme, sidebar, palette, accent, `screens` [{screen,active,layout,tags}] (layout = prose of the main panel from those components; the image is placeholder-text, describe STRUCTURE not copy), and `assets` [{role,type,prompt}]. It renders everything and writes manifest.json.\n\nReturn JSON: {product, manifest_path, sidebar, palette, accent, screens:[{screen,active,components,image_path}], assets:[{role,type,image_path}]}. Do NOT write the final spec — that is the analyst's job.",
+        "papel": "Senior UI/UX + brand design director. You compose real product screens from real component patterns. You do NOT render anything yourself — a downstream node renders your plan as placeholder-text skeletons. You never invent AI-looking filler; you compose from components that actually exist.",
+        "objetivo": "Product brief (injected per run):\n\n{{ param.brief }}\n\n1. Decide the authenticated product's core screens (max 6 unless the brief asks for more) with ONE shared sidebar (single-word nav items, once each) identical across screens.\n2. For each screen use WebSearch to ground the composition in real component patterns (shadcn/ui, Tailwind UI blocks): sidebar, stat cards, data tables, config forms, charts, side detail panels. Note the components per screen inside the layout prose.\n3. Decide the content assets: brand (logo mark, background) and per-screen imagery (hero, illustration, empty-state). Keep them minimal and real.\n4. Choose palette + accent in words (dark theme by default), consistent across screens.\n5. Return the plan as JSON. Each screen's `layout` is PROSE of the main panel composed from those components — describe STRUCTURE not copy (the render is placeholder-text). Do NOT render and do NOT write the final spec.\n\nReturn JSON: {product, theme, palette, accent, sidebar:[...], screens:[{screen,active,layout,tags:[...]}], assets:[{role,type,prompt}]}.",
         "provider": "claude",
         "modelo": "opus-4.8",
         "pasta": "/data/studio",
-        "mcp": "design-models",
-        "ferramentas": "WebSearch mcp__design-models",
-        "esquema": "{\"type\":\"object\",\"required\":[\"product\",\"manifest_path\",\"screens\"],\"properties\":{\"product\":{\"type\":\"string\"},\"manifest_path\":{\"type\":\"string\"},\"sidebar\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}},\"palette\":{\"type\":\"string\"},\"accent\":{\"type\":\"string\"},\"screens\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"screen\":{\"type\":\"string\"},\"active\":{\"type\":\"string\"},\"components\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}},\"image_path\":{\"type\":\"string\"}}}},\"assets\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"role\":{\"type\":\"string\"},\"type\":{\"type\":\"string\"},\"image_path\":{\"type\":\"string\"}}}}}}",
-        "timeout_s": 3600
+        "mcp": "(nenhum)",
+        "ferramentas": "WebSearch",
+        "esquema": "{\"type\":\"object\",\"required\":[\"product\",\"screens\"],\"properties\":{\"product\":{\"type\":\"string\"},\"theme\":{\"type\":\"string\",\"enum\":[\"dark\",\"light\"]},\"palette\":{\"type\":\"string\"},\"accent\":{\"type\":\"string\"},\"sidebar\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}},\"screens\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"required\":[\"screen\",\"layout\"],\"properties\":{\"screen\":{\"type\":\"string\"},\"active\":{\"type\":\"string\"},\"layout\":{\"type\":\"string\"},\"tags\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}}}}},\"assets\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"required\":[\"role\",\"type\",\"prompt\"],\"properties\":{\"role\":{\"type\":\"string\"},\"type\":{\"type\":\"string\",\"enum\":[\"photo\",\"illustration\",\"icon\",\"background\",\"logo\"]},\"prompt\":{\"type\":\"string\"}}}}}}",
+        "timeout_s": 1800
+      }
+    },
+    {
+      "id": "telas",
+      "tipo": "telas",
+      "nome": "telas",
+      "params": {
+        "produto": "{{ entrada.compositor.product }}",
+        "tema": "{{ entrada.compositor.theme || 'dark' }}",
+        "modelo": "z-image",
+        "formato": "web-mockup",
+        "paleta": "{{ entrada.compositor.palette }}",
+        "acento": "{{ entrada.compositor.accent }}",
+        "sidebar": "{{ entrada.compositor.sidebar }}",
+        "telas": "{{ entrada.compositor.screens }}",
+        "assets": "{{ entrada.compositor.assets }}",
+        "prefixo": "studio/design"
       }
     },
     {
@@ -25,7 +42,7 @@
       "nome": "analyst",
       "params": {
         "papel": "Extremely thorough principal design engineer. You look at what was generated and produce the complete, buildable specification — the maximum useful information — so the caller can build the product without guessing.",
-        "objetivo": "Manifest from the compositor: {{ entrada.compositor.manifest_path }}\nProduct: {{ entrada.compositor.product }} | sidebar: {{ entrada.compositor.sidebar }} | palette: {{ entrada.compositor.palette }} | accent: {{ entrada.compositor.accent }}\n\n1. Read the manifest.json at that path AND Read every screen image it lists (use the Read tool; you can see images). Images are placeholder-text skeletons: read them for LAYOUT, hierarchy, proportion, colour and component placement. Do NOT trust text pixels — you write the real copy.\n2. Produce the full spec (see schema below), with maximum detail: design_tokens (real hexes per role, typography families + scale + weights, spacing, radii, borders, shadows, motion easing+durations); global (sidebar labels+icons, topbar, grid, breakpoints); screens[] (route, purpose, active_nav, image_ref, a component_tree with type+props+REAL copy+data_shape, regions, states loading/empty/error, responsive per breakpoint); components[] (real components + source + props); assets (brand + per_screen mapped to files + placement); copy (every real string keyed by id).\n3. Be exhaustive and internally consistent; concrete values over vague notes. This spec is the single source of truth for the build.\n\nReturn ONLY the spec JSON.",
+        "objetivo": "Manifest rendered by the telas node: {{ entrada.telas.manifest_path }}\nProduct: {{ entrada.compositor.product }} | sidebar: {{ entrada.compositor.sidebar }} | palette: {{ entrada.compositor.palette }} | accent: {{ entrada.compositor.accent }}\n\n1. Read the manifest.json at that path AND Read every screen image it lists (use the Read tool; you can see images). Images are placeholder-text skeletons: read them for LAYOUT, hierarchy, proportion, colour and component placement. Do NOT trust text pixels — you write the real copy.\n2. Produce the full spec (see spec-schema.json), with maximum detail: design_tokens (real hexes per role, typography families + scale + weights, spacing, radii, borders, shadows, motion easing+durations); global (sidebar labels+icons, topbar, grid, breakpoints); screens[] (route, purpose, active_nav, image_ref, a component_tree with type+props+REAL copy+data_shape, regions, states loading/empty/error, responsive per breakpoint); components[] (real components + source + props); assets (brand + per_screen mapped to files + placement); copy (every real string keyed by id).\n3. Be exhaustive and internally consistent; concrete values over vague notes. This spec is the single source of truth for the build.\n\nReturn ONLY the spec JSON.",
         "provider": "claude",
         "modelo": "opus-5",
         "pasta": "/data/studio",
@@ -37,6 +54,7 @@
     }
   ],
   "ligacoes": [
-    { "de": "compositor", "para": "analyst" }
+    { "de": "compositor", "para": "telas" },
+    { "de": "telas", "para": "analyst" }
   ]
 }
